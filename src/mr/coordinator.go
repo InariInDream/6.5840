@@ -52,6 +52,44 @@ type MapTaskArgs struct {
 	WorkerId int
 }
 
+type MapTaskJoinArgs struct {
+	// args that a worker sends to join a map task
+	FilleId  int
+	WorkerId int
+}
+
+type MapTaskJoinReply struct {
+	// reply that a worker gets if it joins a map task
+	Accepted bool
+}
+
+type ReduceTaskArgs struct {
+	WorkerId int
+}
+
+type ReduceTaskReply struct {
+	// RIndex: reduce index
+	RIndex int
+	// NReduce: number of reduce tasks
+	NReduce int
+	// FileCount: number of files to reduce
+	FileCount int
+	// DoneFlag: whether all reduce tasks are done
+	DoneFlag bool
+}
+
+type ReduceTaskJoinArgs struct {
+	// args that a worker sends to join a reduce task
+	WorkerId int
+	// RIndex: reduce index
+	RIndex int
+}
+
+type ReduceTaskJoinReply struct {
+	// reply that a worker gets if it joins a reduce task
+	Accepted bool
+}
+
 // Your code here -- RPC handlers for the worker to call.
 
 // an example RPC handler.
