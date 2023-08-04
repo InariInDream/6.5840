@@ -24,16 +24,19 @@ func ihash(key string) int {
 }
 
 func keyReduceIndex(key string, nReduce int) int {
+	// use ihash(key) % NReduce to choose the reduce
 	return ihash(key) % nReduce
 }
 
 const pathPrefix = "./"
 
 func makePgFileName(name *string) string {
+	// make a filename for a pg-*.txt file
 	return "pg-" + *name + ".txt"
 }
 
 func makeIntermediateFromFile(filename string, mapf func(string, string) []KeyValue) []KeyValue {
+	// read file and return intermediate
 	path := filename
 	file, err := os.Open(path)
 
@@ -52,6 +55,7 @@ func makeIntermediateFromFile(filename string, mapf func(string, string) []KeyVa
 }
 
 type Aworker struct {
+	// a struct for worker
 	mapf    func(string, string) []KeyValue
 	reducef func(string, []string) string
 	// true: Map
@@ -70,12 +74,13 @@ func (worker *Aworker) logPrintf(format string, vars ...interface{}) {
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
+	// a function for worker, it will run forever until all tasks are done
 	// Your worker implementation here.
 	worker := Aworker{}
 	worker.mapf = mapf
 	worker.reducef = reducef
-	worker.MapOrReduce = false
+	// map task first
+	worker.MapOrReduce = true
 	worker.DoneFlag = false
 	worker.WorkerId = -1
 
@@ -92,8 +97,30 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 func (worker *Aworker) askMapTask() *MapTaskReply {
-	/* ask for a map task */
+	/* ask for a map task then return the reply */
 	args := MapTaskArgs{}
+	args.WorkerId = worker.WorkerId
+	reply := MapTaskReply{}
+
+	worker.logPrintf("Asking for a map task...")
+	call("Coordinator.GiveMapTask", &args, &reply)
+
+	// obtain a worker id
+	worker.WorkerId = reply.WorkerId
+	worker.logPrintf("Got a map task, filename: %s, fileId: %d", reply.FileName, reply.FileId)
+
+	if reply.FileId == -1 {
+		// refused to give a task
+		if reply.DoneFlag {
+			worker.logPrintf("No more map tasks, switching to reduce tasks...")
+			return nil
+		} else {
+			worker.logPrintf("No map tasks available, waiting...")
+			return &reply
+		}
+	}
+	worker.logPrintf("got a map task, filename: %s, fileId: %d", reply.FileName, reply.FileId)
+	return &reply
 }
 
 // example function to show how to make an RPC call to the coordinator.
