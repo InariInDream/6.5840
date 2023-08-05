@@ -1,6 +1,9 @@
 package mr
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 import "net"
 import "os"
 import "net/rpc"
@@ -14,18 +17,33 @@ type MapTaskState struct {
 	fileId      int
 }
 
-type ReduceTaskState struct {
-	beginSecond int64
-	workerId    int
-	fileId      int
-}
-
 type Coordinator struct {
 	// Your definitions here.
-	fileNames        []string
-	nReduce          int
-	nowWorkerId      int
+	fileNames   []string
+	nReduce     int
+	nowWorkerId int
+
+	// unIssuedMapTasks: a queue of unissued map tasks
 	unIssuedMapTasks *BlockQueue
+	// issuedMapTasks: a map from fileId to a queue of issued map tasks
+	issuedMapTasks *MapSet
+	// issueMapMutex: a mutex for issuedMapTasks
+	issueMapMutex sync.Mutex
+
+	// unIssuedReduceTasks: a queue of unissued reduce tasks
+	unIssuedReduceTasks *BlockQueue
+	// issuedReduceTasks: a map from fileId to a queue of issued reduce tasks
+	issuedReduceTasks *MapSet
+	// issueReduceMutex: a mutex for issuedReduceTasks
+	issueReduceMutex sync.Mutex
+
+	// task states
+	mapTasks    []MapTaskState
+	reduceTasks []ReduceTaskState
+
+	// done flags
+	mapDone  bool
+	doneFlag bool
 }
 
 type MapTaskReply struct {
@@ -61,6 +79,53 @@ type MapTaskJoinArgs struct {
 type MapTaskJoinReply struct {
 	// reply that a worker gets if it joins a map task
 	Accepted bool
+}
+
+func mapDoneProcess(reply *MapTaskReply) {
+	log.Println("All map tasks are done! Telling workers to switch to reduce tasks...")
+	reply.DoneFlag = true
+	reply.FileId = -1
+}
+
+func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error {
+	if args.WorkerId == -1 {
+		// allocate a new worker id
+		reply.WorkerId = c.nowWorkerId
+		c.nowWorkerId++
+	} else {
+		reply.WorkerId = args.WorkerId
+	}
+	log.Printf("Worker %d asks for a map task...\n", reply.WorkerId)
+
+	// lock the mutex to keep the map task queue safe
+	c.issueMapMutex.Lock()
+
+	if c.mapDone {
+		mapDoneProcess(reply)
+		c.issueMapMutex.Unlock()
+		// notify in yellow color
+		log.Printf("\033[33mWorker %d: All map tasks are done! Telling workers to switch to reduce tasks...\033[0m\n", reply.WorkerId)
+		return nil
+	}
+
+	if c.unIssuedMapTasks.size() == 0 && c.issuedMapTasks.Size() == 0 {
+		// no more map tasks
+		c.mapDone = true
+		mapDoneProcess(reply)
+		c.issueMapMutex.Unlock()
+		// notify in yellow color
+		log.Printf("\033[33mWorker %d: All map tasks are done! Telling workers to switch to reduce tasks...\033[0m\n", reply.WorkerId)
+		return nil
+	}
+
+	// get a map task
+	log.Printf("%v unissued map tasks, %v issued map tasks\n", c.unIssuedMapTasks.size(), c.issuedMapTasks.Size())
+}
+
+type ReduceTaskState struct {
+	beginSecond int64
+	workerId    int
+	fileId      int
 }
 
 type ReduceTaskArgs struct {
