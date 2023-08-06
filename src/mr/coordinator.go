@@ -120,6 +120,10 @@ func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error 
 
 	// get a map task
 	log.Printf("%v unissued map tasks, %v issued map tasks\n", c.unIssuedMapTasks.size(), c.issuedMapTasks.Size())
+
+	// release the mutex to allow unissued map tasks to be issued
+	c.issueMapMutex.Unlock()
+
 }
 
 type ReduceTaskState struct {
