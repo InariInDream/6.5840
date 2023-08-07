@@ -3,6 +3,7 @@ package mr
 import (
 	"log"
 	"sync"
+	"time"
 )
 import "net"
 import "os"
@@ -123,6 +124,49 @@ func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error 
 
 	// release the mutex to allow unissued map tasks to be issued
 	c.issueMapMutex.Unlock()
+	// get current time
+	nowSecond := getNowSecond()
+
+	// get a map task from the unissued map task queue
+	res, err := c.unIssuedMapTasks.popBack()
+	var fileId int
+	if err != nil {
+		log.Println("No more unissued map tasks for now, waiting...")
+		fileId = -1
+
+	} else {
+		fileId = res.(int)
+		// add this task to the issued map task queue
+		c.issueMapMutex.Lock()
+		reply.FileName = c.fileNames[fileId]
+		c.mapTasks[fileId] = MapTaskState{
+			beginSecond: nowSecond,
+			workerId:    reply.WorkerId,
+		}
+		c.issuedMapTasks.Insert(fileId)
+		// this operation is done, release the mutex
+		c.issueMapMutex.Unlock()
+
+		log.Printf("\033[1;32;40mgiving map task %v on file %v at second %v\033[0m\n", fileId, reply.FileName, nowSecond)
+	}
+	reply.FileId = fileId
+	reply.NReduce = c.nReduce
+	reply.DoneFlag = false
+
+	return nil
+}
+
+func getNowSecond() int64 {
+	return time.Now().UnixNano() / int64(time.Second)
+}
+
+func (c *Coordinator) joinMapTask(args *MapTaskJoinArgs, reply *MapTaskJoinReply) error {
+	// check the current time for whether the worker is taking too long
+	nowSecond := getNowSecond()
+	log.Printf("got a join request from worker %v on file %v %v \n", args.WorkerId, args.FilleId, c.fileNames[args.FilleId])
+
+	c.issueMapMutex.Lock()
+	defer c.issueMapMutex.Unlock()
 
 }
 
