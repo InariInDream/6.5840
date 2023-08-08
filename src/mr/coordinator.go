@@ -73,7 +73,7 @@ type MapTaskArgs struct {
 
 type MapTaskJoinArgs struct {
 	// args that a worker sends to join a map task
-	FilleId  int
+	FileId   int
 	WorkerId int
 }
 
@@ -163,11 +163,40 @@ func getNowSecond() int64 {
 func (c *Coordinator) joinMapTask(args *MapTaskJoinArgs, reply *MapTaskJoinReply) error {
 	// check the current time for whether the worker is taking too long
 	nowSecond := getNowSecond()
-	log.Printf("got a join request from worker %v on file %v %v \n", args.WorkerId, args.FilleId, c.fileNames[args.FilleId])
+	log.Printf("got a join request from worker %v on file %v %v \n", args.WorkerId, args.FileId, c.fileNames[args.FileId])
 
 	c.issueMapMutex.Lock()
 	defer c.issueMapMutex.Unlock()
 
+	taskTime := c.mapTasks[args.FileId].beginSecond
+
+	// check if the task is still valid
+	if !c.issuedMapTasks.Contains(args.FileId) {
+		log.Println("task does not exist or already done, ignoring...")
+		c.issueMapMutex.Unlock()
+		reply.Accepted = false
+		return nil
+	}
+
+	// check if the workerid matches
+	if c.mapTasks[args.FileId].workerId != args.WorkerId {
+		log.Printf("map task belongs to worker %v, not worker %v, ignoring...\n", c.mapTasks[args.FileId].workerId, args.WorkerId)
+		c.issueMapMutex.Unlock()
+		reply.Accepted = false
+		return nil
+	}
+
+	if nowSecond-taskTime > maxTaxTime {
+		log.Printf("worker %v is taking too long, ignoring...\n", args.WorkerId)
+		reply.Accepted = false
+		c.unIssuedMapTasks.appendFront(args.FileId)
+	} else {
+		log.Println("\033[1;32;40mjoin request accepted\033[0m")
+		reply.Accepted = true
+		c.issuedMapTasks.Delete(args.FileId)
+	}
+	c.issueMapMutex.Unlock()
+	return nil
 }
 
 type ReduceTaskState struct {
@@ -191,6 +220,14 @@ type ReduceTaskReply struct {
 	DoneFlag bool
 }
 
+func (c *Coordinator) prepareAllReduceTasks() {
+	// prepare all reduce tasks
+	for i := 0; i < c.nReduce; i++ {
+		log.Printf("putting %vth reduce task into channel\n", i)
+		c.unIssuedReduceTasks.appendBack(i)
+	}
+}
+
 type ReduceTaskJoinArgs struct {
 	// args that a worker sends to join a reduce task
 	WorkerId int
@@ -201,6 +238,130 @@ type ReduceTaskJoinArgs struct {
 type ReduceTaskJoinReply struct {
 	// reply that a worker gets if it joins a reduce task
 	Accepted bool
+}
+
+func (c *Coordinator) GiveReduceTask(args *ReduceTaskArgs, reply *ReduceTaskReply) error {
+	log.Printf("Worker %v asks for a reduce task...\n", args.WorkerId)
+	c.issueReduceMutex.Lock()
+	defer c.issueReduceMutex.Unlock()
+
+	// all done
+	if c.unIssuedReduceTasks.size() == 0 && c.issuedReduceTasks.Size() == 0 {
+		// info in green color
+		log.Println("\033[1;32;40mAll reduce tasks are done! Telling workers to switch to shut down..\033[0m")
+		c.issueReduceMutex.Unlock()
+		c.doneFlag = true
+		reply.DoneFlag = true
+		reply.RIndex = -1
+		return nil
+	}
+
+	log.Printf("%v unissued reduce tasks, %v issued reduce tasks\n", c.unIssuedReduceTasks.size(), c.issuedReduceTasks.Size())
+	// release the mutex to allow unissued reduce tasks to be issued
+	c.issueReduceMutex.Unlock()
+
+	nowSecond := getNowSecond()
+	res, err := c.unIssuedReduceTasks.popBack()
+	var rIndex int
+	if err != nil {
+		log.Println("No more unissued reduce tasks for now, waiting...")
+		rIndex = -1
+	} else {
+		rIndex = res.(int)
+		// add this task to the issued reduce task queue
+		c.issueReduceMutex.Lock()
+		c.reduceTasks[rIndex] = ReduceTaskState{
+			beginSecond: nowSecond,
+			workerId:    args.WorkerId,
+		}
+		c.issuedReduceTasks.Insert(rIndex)
+		// this operation is done, release the mutex
+		c.issueReduceMutex.Unlock()
+		log.Printf("\033[1;32;40mgiving reduce task %v at second %v\033[0m\n", rIndex, nowSecond)
+	}
+	reply.RIndex = rIndex
+	reply.NReduce = c.nReduce
+	reply.FileCount = len(c.fileNames)
+	reply.DoneFlag = false
+
+	return nil
+}
+
+func (c *Coordinator) JoinReduceTask(args *ReduceTaskJoinArgs, reply *ReduceTaskJoinReply) error {
+	// check the current time for whether the worker is taking too long
+	nowSecond := getNowSecond()
+	log.Printf("got a join request from worker %v on reduce task %v\n", args.WorkerId, args.RIndex)
+
+	c.issueReduceMutex.Lock()
+	defer c.issueReduceMutex.Unlock()
+
+	taskTime := c.reduceTasks[args.RIndex].beginSecond
+
+	if !c.issuedReduceTasks.Contains(args.RIndex) {
+		log.Println("task does not exist or already done, ignoring...")
+		c.issueReduceMutex.Unlock()
+		reply.Accepted = false
+		return nil
+	}
+
+	// check if the workerid matches
+	if c.reduceTasks[args.RIndex].workerId != args.WorkerId {
+		log.Printf("reduce task belongs to worker %v, not worker %v, ignoring...\n", c.reduceTasks[args.RIndex].workerId, args.WorkerId)
+		c.issueReduceMutex.Unlock()
+		reply.Accepted = false
+		return nil
+	}
+
+	if nowSecond-taskTime > maxTaxTime {
+		log.Printf("worker %v is taking too long, ignoring...\n", args.WorkerId)
+		reply.Accepted = false
+		c.unIssuedReduceTasks.appendFront(args.RIndex)
+	} else {
+		log.Println("\033[1;32;40mjoin request accepted\033[0m")
+		reply.Accepted = true
+		c.issuedReduceTasks.Delete(args.RIndex)
+	}
+	c.issueReduceMutex.Unlock()
+	return nil
+}
+
+func (m *MapSet) removeTimeoutMapTasks(mapTasks []MapTaskState, unIssuedTasks *BlockQueue) {
+	for fileId, issued := range m.mapbool {
+		nowSecond := getNowSecond()
+		if issued && nowSecond-mapTasks[fileId.(int)].beginSecond > maxTaxTime {
+			log.Printf("worker %v is taking too long, putting %vth map task back to unissued queue...\n", mapTasks[fileId.(int)].workerId, fileId.(int))
+			unIssuedTasks.appendFront(fileId.(int))
+			m.Delete(fileId)
+		}
+	}
+}
+
+func (m *MapSet) removeTimeoutReduceTasks(reduceTasks []ReduceTaskState, unIssuedTasks *BlockQueue) {
+	for rIndex, issued := range m.mapbool {
+		nowSecond := getNowSecond()
+		if issued && nowSecond-reduceTasks[rIndex.(int)].beginSecond > maxTaxTime {
+			log.Printf("worker %v is taking too long, putting %vth reduce task back to unissued queue...\n", reduceTasks[rIndex.(int)].workerId, rIndex.(int))
+			unIssuedTasks.appendFront(rIndex.(int))
+			m.Delete(rIndex)
+		}
+	}
+}
+
+func (c *Coordinator) removeTimeoutTasks() {
+	log.Println("removing timeout tasks...")
+	c.issueMapMutex.Lock()
+	c.issuedMapTasks.removeTimeoutMapTasks(c.mapTasks, c.unIssuedMapTasks)
+	c.issueMapMutex.Unlock()
+	c.issueReduceMutex.Lock()
+	c.issuedReduceTasks.removeTimeoutReduceTasks(c.reduceTasks, c.unIssuedReduceTasks)
+	c.issueReduceMutex.Unlock()
+}
+
+func (c *Coordinator) loopRmTimeoutTasks() {
+	for !c.doneFlag {
+		c.removeTimeoutTasks()
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -230,11 +391,15 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := true
+	//ret := true
 
 	// Your code here.
-
-	return ret
+	if c.doneFlag {
+		log.Println("asked whether the job is done, replying true...")
+	} else {
+		log.Println("asked whether the job is done, replying false...")
+	}
+	return c.doneFlag
 }
 
 // create a Coordinator.
@@ -244,7 +409,37 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
+	// main/mrcoordinator.go calls this function.
 
+	log.SetPrefix("Coordinator: ")
+	log.Println("initializing a coordinator...")
+
+	c = Coordinator{
+		fileNames:           files,
+		nReduce:             nReduce,
+		nowWorkerId:         0,
+		mapTasks:            make([]MapTaskState, len(files)),
+		reduceTasks:         make([]ReduceTaskState, nReduce),
+		unIssuedMapTasks:    NewBlockQueue(),
+		issuedMapTasks:      NewMapSet(),
+		unIssuedReduceTasks: NewBlockQueue(),
+		issuedReduceTasks:   NewMapSet(),
+		mapDone:             false,
+		doneFlag:            false,
+	}
+
+	// start a thread that listens for RPCs from worker.go
 	c.server()
+	log.Println("listening for RPCs from worker.go...")
+
+	// start a new goroutine to remove timeout tasks
+	go c.loopRmTimeoutTasks()
+
+	log.Printf("file count: %v\n", len(files))
+	for i := 0; i < len(files); i++ {
+		log.Printf("putting %vth map task into channel\n", i)
+		c.unIssuedMapTasks.appendBack(i)
+	}
+
 	return &c
 }

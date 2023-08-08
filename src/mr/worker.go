@@ -158,13 +158,14 @@ func (worker *Aworker) writeToFile(fileId int, nReduce int, intermediate []KeyVa
 			worker.logPrintf("rename tempfile failed for %v\n", outname)
 			log.Fatal(err)
 		}
+		tempfile.Close()
 	}
 }
 
 func (worker *Aworker) joinMapTask(fileId int) {
 	// notify coordinator that map task is done, the worker can join another map task
 	args := MapTaskJoinArgs{
-		FilleId:  fileId,
+		FileId:   fileId,
 		WorkerId: worker.WorkerId,
 	}
 
@@ -306,6 +307,7 @@ func (worker *Aworker) executeReduce(reply *ReduceTaskReply) {
 		worker.logPrintf("rename tempfile failed for %v\n", outname)
 		log.Fatal(err)
 	}
+	tempfile.Close()
 	worker.joinReduceTask(reply.RIndex)
 }
 
