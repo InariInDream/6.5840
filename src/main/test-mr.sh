@@ -331,7 +331,8 @@ fi
 
 #########################################################
 if [ $failed_any -eq 0 ]; then
-    echo '***' PASSED ALL TESTS
+    # print in green text
+    echo -e '\033[1;32m' "***" PASSED ALL TESTS '\033[0m'
 else
     echo '***' FAILED SOME TESTS
     exit 1

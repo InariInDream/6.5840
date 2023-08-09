@@ -83,7 +83,7 @@ type MapTaskJoinReply struct {
 }
 
 func mapDoneProcess(reply *MapTaskReply) {
-	log.Println("All map tasks are done! Telling workers to switch to reduce tasks...")
+	log.Println("\033[33mAll map tasks are done! Telling workers to switch to reduce tasks...\033[0m")
 	reply.DoneFlag = true
 	reply.FileId = -1
 }
@@ -96,7 +96,7 @@ func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error 
 	} else {
 		reply.WorkerId = args.WorkerId
 	}
-	log.Printf("Worker %d asks for a map task...\n", reply.WorkerId)
+	log.Printf("Worker %v asks for a map task...\n", reply.WorkerId)
 
 	// lock the mutex to keep the map task queue safe
 	c.issueMapMutex.Lock()
@@ -105,7 +105,7 @@ func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error 
 		mapDoneProcess(reply)
 		c.issueMapMutex.Unlock()
 		// notify in yellow color
-		log.Printf("\033[33mWorker %d: All map tasks are done! Telling workers to switch to reduce tasks...\033[0m\n", reply.WorkerId)
+		log.Printf("\033[33mWorker %v: All map tasks are done! Telling workers to switch to reduce tasks...\033[0m\n", reply.WorkerId)
 		return nil
 	}
 
@@ -113,9 +113,10 @@ func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error 
 		// no more map tasks
 		c.mapDone = true
 		mapDoneProcess(reply)
+		c.prepareAllReduceTasks()
 		c.issueMapMutex.Unlock()
 		// notify in yellow color
-		log.Printf("\033[33mWorker %d: All map tasks are done! Telling workers to switch to reduce tasks...\033[0m\n", reply.WorkerId)
+		log.Printf("\033[33mWorker %v: All map tasks are done! Telling workers to switch to reduce tasks...\033[0m\n", reply.WorkerId)
 		return nil
 	}
 
@@ -147,7 +148,7 @@ func (c *Coordinator) GiveMapTask(args *MapTaskArgs, reply *MapTaskReply) error 
 		// this operation is done, release the mutex
 		c.issueMapMutex.Unlock()
 
-		log.Printf("\033[1;32;40mgiving map task %v on file %v at second %v\033[0m\n", fileId, reply.FileName, nowSecond)
+		log.Printf("\033[33mgiving map task %v on file %v at second %v\033[0m\n", fileId, reply.FileName, nowSecond)
 	}
 	reply.FileId = fileId
 	reply.NReduce = c.nReduce
@@ -160,13 +161,13 @@ func getNowSecond() int64 {
 	return time.Now().UnixNano() / int64(time.Second)
 }
 
-func (c *Coordinator) joinMapTask(args *MapTaskJoinArgs, reply *MapTaskJoinReply) error {
+func (c *Coordinator) JoinMapTask(args *MapTaskJoinArgs, reply *MapTaskJoinReply) error {
 	// check the current time for whether the worker is taking too long
 	nowSecond := getNowSecond()
 	log.Printf("got a join request from worker %v on file %v %v \n", args.WorkerId, args.FileId, c.fileNames[args.FileId])
 
 	c.issueMapMutex.Lock()
-	defer c.issueMapMutex.Unlock()
+	//defer c.issueMapMutex.Unlock()
 
 	taskTime := c.mapTasks[args.FileId].beginSecond
 
@@ -191,7 +192,7 @@ func (c *Coordinator) joinMapTask(args *MapTaskJoinArgs, reply *MapTaskJoinReply
 		reply.Accepted = false
 		c.unIssuedMapTasks.appendFront(args.FileId)
 	} else {
-		log.Println("\033[1;32;40mjoin request accepted\033[0m")
+		log.Println("\033[33mjoin request accepted\033[0m")
 		reply.Accepted = true
 		c.issuedMapTasks.Delete(args.FileId)
 	}
@@ -243,12 +244,12 @@ type ReduceTaskJoinReply struct {
 func (c *Coordinator) GiveReduceTask(args *ReduceTaskArgs, reply *ReduceTaskReply) error {
 	log.Printf("Worker %v asks for a reduce task...\n", args.WorkerId)
 	c.issueReduceMutex.Lock()
-	defer c.issueReduceMutex.Unlock()
+	//defer c.issueReduceMutex.Unlock()
 
 	// all done
 	if c.unIssuedReduceTasks.size() == 0 && c.issuedReduceTasks.Size() == 0 {
 		// info in green color
-		log.Println("\033[1;32;40mAll reduce tasks are done! Telling workers to switch to shut down..\033[0m")
+		log.Println("\033[33mAll reduce tasks are done! Telling workers to switch to shut down..\033[0m")
 		c.issueReduceMutex.Unlock()
 		c.doneFlag = true
 		reply.DoneFlag = true
@@ -277,7 +278,7 @@ func (c *Coordinator) GiveReduceTask(args *ReduceTaskArgs, reply *ReduceTaskRepl
 		c.issuedReduceTasks.Insert(rIndex)
 		// this operation is done, release the mutex
 		c.issueReduceMutex.Unlock()
-		log.Printf("\033[1;32;40mgiving reduce task %v at second %v\033[0m\n", rIndex, nowSecond)
+		log.Printf("\033[33mgiving reduce task %v at second %v\033[0m\n", rIndex, nowSecond)
 	}
 	reply.RIndex = rIndex
 	reply.NReduce = c.nReduce
@@ -293,7 +294,7 @@ func (c *Coordinator) JoinReduceTask(args *ReduceTaskJoinArgs, reply *ReduceTask
 	log.Printf("got a join request from worker %v on reduce task %v\n", args.WorkerId, args.RIndex)
 
 	c.issueReduceMutex.Lock()
-	defer c.issueReduceMutex.Unlock()
+	//defer c.issueReduceMutex.Unlock()
 
 	taskTime := c.reduceTasks[args.RIndex].beginSecond
 
@@ -317,7 +318,7 @@ func (c *Coordinator) JoinReduceTask(args *ReduceTaskJoinArgs, reply *ReduceTask
 		reply.Accepted = false
 		c.unIssuedReduceTasks.appendFront(args.RIndex)
 	} else {
-		log.Println("\033[1;32;40mjoin request accepted\033[0m")
+		log.Println("\033[33mjoin request accepted\033[0m")
 		reply.Accepted = true
 		c.issuedReduceTasks.Delete(args.RIndex)
 	}
